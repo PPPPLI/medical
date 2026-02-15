@@ -34,14 +34,16 @@ jobs:
       # ----------------------------
       # SAST (Snyk Code)
       # ----------------------------
-      - name: Snyk Code (SAST)
+      - name: Install Snyk CLI
+        run: npm i -g snyk
+
+      - name: Snyk Open Source (SCA)
         continue-on-error: true
-        uses: snyk/actions@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: code test
-          args: --severity-threshold=high
+        run: |
+          snyk auth "$SNYK_TOKEN"
+          snyk test --all-projects --severity-threshold=high
 
       # ----------------------------
       # Java build (produce jars)
@@ -104,8 +106,8 @@ jobs:
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
         with:
-          directory: .
-          framework: dockerfile,docker_compose
+          directory: ./docker
+          framework: dockerfile,yaml
           soft_fail: true
 
       # ----------------------------
@@ -192,6 +194,7 @@ jobs:
         with:
           target: "http://localhost:9000"
           fail_action: false
+          docker_user: root
 
       # ----------------------------
       # Always show logs at the end (useful)
