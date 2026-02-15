@@ -191,23 +191,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 让挂载目录可写（保险）
-          chmod -R a+rwx "$GITHUB_WORKSPACE"
-
+          
+          # 单独创建一个给 ZAP 写文件的目录（避免 chmod workspace）
+          ZAP_DIR="$RUNNER_TEMP/zap-wrk"
+          mkdir -p "$ZAP_DIR"
+          
+          # 把扫描报告输出到这个目录
           docker pull ghcr.io/zaproxy/zaproxy:stable -q
-
+          
           docker run --rm --network=host \
             -u 0:0 \
-            -v "$GITHUB_WORKSPACE":/zap/wrk/:rw \
+            -v "$ZAP_DIR":/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
               -t "http://localhost:9000" \
               -J report_json.json \
               -w report_md.md \
               -r report_html.html || true
-
+          
           echo "---- ZAP reports ----"
-          ls -lah report_json.json report_md.md report_html.html || true
+          ls -lah "$ZAP_DIR" || true
+          
+          # 把报告拷回 workspace（方便你下载artifact或在日志里看到）
+          cp -f "$ZAP_DIR"/report_json.json ./report_json.json || true
+          cp -f "$ZAP_DIR"/report_md.md   ./report_md.md || true
+          cp -f "$ZAP_DIR"/report_html.html ./report_html.html || true
 
       # ----------------------------
       # Always show logs at the end (useful)
