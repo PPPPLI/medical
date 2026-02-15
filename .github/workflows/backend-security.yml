@@ -32,21 +32,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------
-      # SAST (Snyk Code)
-      # ----------------------------
-      - name: Install Snyk CLI
-        run: npm i -g snyk
-
-      - name: Snyk Open Source (SCA)
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          snyk auth "$SNYK_TOKEN"
-          snyk test --all-projects --severity-threshold=high
-
-      # ----------------------------
-      # Java build (produce jars)
+      # Java setup (needed for Maven + Snyk dependency analysis)
       # ----------------------------
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -55,12 +41,14 @@ jobs:
           java-version: "17"
           cache: maven
 
+      # ----------------------------
+      # Build backend jars (produce jars)
+      # ----------------------------
       - name: Build backend jars (skip tests)
         run: mvn -q -DskipTests package
 
       # ----------------------------
       # Prepare jars for docker-compose volumes
-      # (compose is in ./docker so jars must be in docker/jars)
       # ----------------------------
       - name: Prepare jars for docker-compose volumes
         shell: bash
@@ -81,26 +69,38 @@ jobs:
           fi
 
           cp "${AUTH_JAR}" docker/jars/authentication.jar
-          # compose volume expects ./jars/appointment.jar for appointment service
-          cp "${APP_JAR}" docker/jars/appointment.jar
-          cp "${GW_JAR}" docker/jars/gateway.jar
+          cp "${APP_JAR}"  docker/jars/appointment.jar
+          cp "${GW_JAR}"   docker/jars/gateway.jar
 
           echo "✅ jars prepared:"
           ls -lah docker/jars
 
       # ----------------------------
-      # SCA (Snyk Open Source)
+      # Snyk (SCA + optional SAST code)
+      # - Use CLI (NOT snyk/actions/maven) to avoid JAVA_HOME issues in docker action
       # ----------------------------
+      - name: Install Snyk CLI
+        run: npm i -g snyk
+
       - name: Snyk Open Source (SCA)
         continue-on-error: true
-        uses: snyk/actions/maven@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --all-projects --severity-threshold=high
+        run: |
+          snyk auth "$SNYK_TOKEN"
+          snyk test --all-projects --severity-threshold=high
+
+      # 如果你还想做 Snyk Code（SAST），打开这段
+      # - name: Snyk Code (SAST)
+      #   continue-on-error: true
+      #   env:
+      #     SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      #   run: |
+      #     snyk auth "$SNYK_TOKEN"
+      #     snyk code test --severity-threshold=high
 
       # ----------------------------
-      # IaC scan (Checkov)
+      # IaC scan (Checkov) - scan docker directory (dockerfile + compose yaml)
       # ----------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
@@ -135,8 +135,7 @@ jobs:
           docker ps
 
       # ----------------------------
-      # Wait for Gateway
-      # 失败也不直接终止，并把结果写到 output
+      # Wait for Gateway health (with logs)
       # ----------------------------
       - name: Wait for Gateway health (with logs)
         id: wait_gateway
@@ -145,21 +144,21 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for gateway health at ${GATEWAY_URL}/actuator/health ..."
-          
+
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps || true
           echo "---- gateway port mapping ----"
-          docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" port gateway 8080 || true
-          
+          # 如果你的 gateway 容器里监听的是 9000，就改成 9000
+          docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" port gateway 9000 || true
+
           GW_ID="$(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps -q gateway || true)"
           echo "gateway container id: ${GW_ID}"
-          
+
           for i in {1..120}; do
-            # 打印容器状态（看是否在重启）
             if [[ -n "${GW_ID}" ]]; then
               echo "---- status attempt ${i} ----"
               docker inspect --format='Status={{.State.Status}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${GW_ID}" || true
             fi
-          
+
             code="$(curl -sS -o /tmp/health.json -w "%{http_code}" "${GATEWAY_URL}/actuator/health" || true)"
             if [[ "$code" == "200" ]]; then
               echo "✅ Gateway health OK"
@@ -167,34 +166,48 @@ jobs:
               echo "ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-          
+
             echo "Attempt ${i}: HTTP ${code}"
-            # 每 10 次输出一次 gateway 日志尾部（抓到崩溃原因）
             if (( i % 10 == 0 )); then
               echo "---- gateway logs (tail 200) ----"
               docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs --no-color --tail=200 gateway || true
             fi
-          
+
             sleep 2
           done
-          
+
           echo "❌ Gateway not ready"
           echo "ready=false" >> "$GITHUB_OUTPUT"
           exit 1
 
-
       # ----------------------------
       # DAST - OWASP ZAP baseline
-      # 仅当 gateway ready 才跑；ZAP 失败也不阻断
+      # 你遇到的权限问题来自 ZAP 在 /zap/wrk 写 zap.yaml
+      # action-baseline 不支持 docker_user，所以我们改为自己 docker run，并用 root 运行
       # ----------------------------
-      - name: DAST (OWASP ZAP baseline scan)
+      - name: DAST (OWASP ZAP baseline scan) - run as root (fix permissions)
         if: steps.wait_gateway.outputs.ready == 'true'
         continue-on-error: true
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: "http://localhost:9000"
-          fail_action: false
-          docker_user: root
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 让挂载目录可写（保险）
+          chmod -R a+rwx "$GITHUB_WORKSPACE"
+
+          docker pull ghcr.io/zaproxy/zaproxy:stable -q
+
+          docker run --rm --network=host \
+            -u 0:0 \
+            -v "$GITHUB_WORKSPACE":/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+              -t "http://localhost:9000" \
+              -J report_json.json \
+              -w report_md.md \
+              -r report_html.html || true
+
+          echo "---- ZAP reports ----"
+          ls -lah report_json.json report_md.md report_html.html || true
 
       # ----------------------------
       # Always show logs at the end (useful)

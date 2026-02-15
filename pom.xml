@@ -28,7 +28,7 @@
         <spring.cloud.version>2025.0.0</spring.cloud.version>
         <spring.version>3.5.10</spring.version>
         <lombok.version>1.18.38</lombok.version>
-        <mysql.version>9.2.0</mysql.version>
+        <mysql.version>9.3.0</mysql.version>
         <mapstruct.version>1.5.5.Final</mapstruct.version>
     </properties>
 
