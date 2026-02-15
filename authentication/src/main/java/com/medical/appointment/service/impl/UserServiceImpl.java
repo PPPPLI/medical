@@ -158,14 +158,8 @@ public class UserServiceImpl implements UserService {
 
          User user = userRepository.findUserByUserNameOrUserEmail(userDto.getUserEmail(),userDto.getUserEmail());
 
-         if(user == null){
-             throw new AuthenticationException("Username not found");
-         }
-
-
-         if(!passwdVerifyUtils.verifyPassword(userDto.getUserPassword(),user.getUserPassword())){
-
-             throw new AuthenticationException("Wrong password");
+         if(user == null || !passwdVerifyUtils.verifyPassword(userDto.getUserPassword(),user.getUserPassword())){
+             throw new AuthenticationException("Verity your identity");
          }
 
          if(!user.isEnabled()){

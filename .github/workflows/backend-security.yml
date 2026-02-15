@@ -22,18 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ----------------------------
-      # Secret scanning (Gitleaks)
-      # ----------------------------
       - name: Secret scan (gitleaks)
         continue-on-error: true
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----------------------------
-      # Java setup (needed for Maven + Snyk dependency analysis)
-      # ----------------------------
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -41,15 +35,10 @@ jobs:
           java-version: "17"
           cache: maven
 
-      # ----------------------------
-      # Build backend jars (produce jars)
-      # ----------------------------
+
       - name: Build backend jars (skip tests)
         run: mvn -q -DskipTests package
 
-      # ----------------------------
-      # Prepare jars for docker-compose volumes
-      # ----------------------------
       - name: Prepare jars for docker-compose volumes
         shell: bash
         run: |
@@ -61,7 +50,7 @@ jobs:
           GW_JAR="$(ls -1 gateway/target/*.jar 2>/dev/null | grep -v -- '-plain\.jar$' | head -n 1 || true)"
 
           if [[ -z "${AUTH_JAR}" || -z "${APP_JAR}" || -z "${GW_JAR}" ]]; then
-            echo "❌ Could not find one or more jars."
+            echo "Could not find one or more jars."
             echo "AUTH_JAR=${AUTH_JAR}"
             echo "APP_JAR=${APP_JAR}"
             echo "GW_JAR=${GW_JAR}"
@@ -72,13 +61,9 @@ jobs:
           cp "${APP_JAR}"  docker/jars/appointment.jar
           cp "${GW_JAR}"   docker/jars/gateway.jar
 
-          echo "✅ jars prepared:"
+          echo "jars prepared:"
           ls -lah docker/jars
 
-      # ----------------------------
-      # Snyk (SCA + optional SAST code)
-      # - Use CLI (NOT snyk/actions/maven) to avoid JAVA_HOME issues in docker action
-      # ----------------------------
       - name: Install Snyk CLI
         run: npm i -g snyk
 
@@ -89,19 +74,16 @@ jobs:
         run: |
           snyk auth "$SNYK_TOKEN"
           snyk test --all-projects --severity-threshold=high
+          
+      - name: Snyk Code (SAST)
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk auth "$SNYK_TOKEN"
+          snyk code test --severity-threshold=high
 
-      # 如果你还想做 Snyk Code（SAST），打开这段
-      # - name: Snyk Code (SAST)
-      #   continue-on-error: true
-      #   env:
-      #     SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-      #   run: |
-      #     snyk auth "$SNYK_TOKEN"
-      #     snyk code test --severity-threshold=high
 
-      # ----------------------------
-      # IaC scan (Checkov) - scan docker directory (dockerfile + compose yaml)
-      # ----------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -110,9 +92,6 @@ jobs:
           framework: dockerfile,yaml
           soft_fail: true
 
-      # ----------------------------
-      # Restore JWT private key
-      # ----------------------------
       - name: Restore JWT private key (from GitHub Secret)
         shell: bash
         run: |
@@ -120,12 +99,9 @@ jobs:
           mkdir -p docker/secrets
           echo "${{ secrets.JWT_PRIVATE_KEY_B64 }}" | base64 -d > docker/secrets/jwt_private_key.pem
           chmod 600 docker/secrets/jwt_private_key.pem
-          echo "✅ private key restored:"
+          echo "private key restored:"
           ls -lah docker/secrets
 
-      # ----------------------------
-      # Docker compose up
-      # ----------------------------
       - name: Docker compose up
         id: compose_up
         shell: bash
@@ -134,9 +110,6 @@ jobs:
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --build
           docker ps
 
-      # ----------------------------
-      # Wait for Gateway health (with logs)
-      # ----------------------------
       - name: Wait for Gateway health (with logs)
         id: wait_gateway
         continue-on-error: true
@@ -146,8 +119,6 @@ jobs:
           echo "Waiting for gateway health at ${GATEWAY_URL}/actuator/health ..."
 
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps || true
-          echo "---- gateway port mapping ----"
-          # 如果你的 gateway 容器里监听的是 9000，就改成 9000
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" port gateway 9000 || true
 
           GW_ID="$(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps -q gateway || true)"
@@ -155,13 +126,12 @@ jobs:
 
           for i in {1..120}; do
             if [[ -n "${GW_ID}" ]]; then
-              echo "---- status attempt ${i} ----"
               docker inspect --format='Status={{.State.Status}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${GW_ID}" || true
             fi
 
             code="$(curl -sS -o /tmp/health.json -w "%{http_code}" "${GATEWAY_URL}/actuator/health" || true)"
             if [[ "$code" == "200" ]]; then
-              echo "✅ Gateway health OK"
+              echo "Gateway health OK"
               cat /tmp/health.json || true
               echo "ready=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -169,36 +139,27 @@ jobs:
 
             echo "Attempt ${i}: HTTP ${code}"
             if (( i % 10 == 0 )); then
-              echo "---- gateway logs (tail 200) ----"
               docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs --no-color --tail=200 gateway || true
             fi
 
             sleep 2
           done
 
-          echo "❌ Gateway not ready"
+          echo "Gateway not ready"
           echo "ready=false" >> "$GITHUB_OUTPUT"
           exit 1
 
-      # ----------------------------
-      # DAST - OWASP ZAP baseline
-      # 你遇到的权限问题来自 ZAP 在 /zap/wrk 写 zap.yaml
-      # action-baseline 不支持 docker_user，所以我们改为自己 docker run，并用 root 运行
-      # ----------------------------
-      - name: DAST (OWASP ZAP baseline scan) - run as root (fix permissions)
+      - name: DAST (OWASP ZAP baseline scan)
         if: steps.wait_gateway.outputs.ready == 'true'
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          
-          # 单独创建一个给 ZAP 写文件的目录（避免 chmod workspace）
           ZAP_DIR="$RUNNER_TEMP/zap-wrk"
           mkdir -p "$ZAP_DIR"
-          
-          # 把扫描报告输出到这个目录
+
           docker pull ghcr.io/zaproxy/zaproxy:stable -q
-          
+
           docker run --rm --network=host \
             -u 0:0 \
             -v "$ZAP_DIR":/zap/wrk/:rw \
@@ -208,18 +169,13 @@ jobs:
               -J report_json.json \
               -w report_md.md \
               -r report_html.html || true
-          
-          echo "---- ZAP reports ----"
+
           ls -lah "$ZAP_DIR" || true
-          
-          # 把报告拷回 workspace（方便你下载artifact或在日志里看到）
+
           cp -f "$ZAP_DIR"/report_json.json ./report_json.json || true
           cp -f "$ZAP_DIR"/report_md.md   ./report_md.md || true
           cp -f "$ZAP_DIR"/report_html.html ./report_html.html || true
 
-      # ----------------------------
-      # Always show logs at the end (useful)
-      # ----------------------------
       - name: Show docker logs (always)
         if: always()
         shell: bash

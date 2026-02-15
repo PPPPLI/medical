@@ -32,6 +32,11 @@ public class SecurityChainConfig {
                         .requestMatchers("/user/login").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
                         .requestMatchers("/user/register").permitAll()
+                        .requestMatchers(
+                                "/swagger-ui.html",
+                                "/swagger-ui/**",
+                                "/v3/api-docs/**"
+                        ).permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(authorityFilter, UsernamePasswordAuthenticationFilter.class);
 

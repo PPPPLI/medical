@@ -30,6 +30,11 @@ public class SecurityFilterChainConfig {
                         .pathMatchers("/usr/register").permitAll()
                         .pathMatchers("/usr/login").permitAll()
                         .pathMatchers("/actuator/**").permitAll()
+                        .pathMatchers(
+                                "/swagger-ui.html",
+                                "/swagger-ui/**",
+                                "/v3/api-docs/**"
+                        ).permitAll()
                         .anyExchange().authenticated()
                 )
                 .oauth2ResourceServer(oauth -> oauth

@@ -39,7 +39,7 @@ services:
     networks:
       - medical-net
 
-  # Spring Boot services (run from jars)
+  # Spring Boot services
   authentication:
     image: eclipse-temurin:17-jre
     container_name: authentication
