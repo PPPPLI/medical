@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: auth-8081
+  profiles:
+    active: @spring.profile.active@
+  config:
+    import: "optional:consul:"
+
+server:
+  port: 8081
