@@ -49,7 +49,7 @@ services:
 
     command: ["java", "-jar", "/app/app.jar"]
     ports:
-      - "${AUTH_PORT}:8080"
+      - "${AUTH_PORT}:8081"
     environment:
       SPRING_PROFILES_ACTIVE: prod
       PRIVATE_KEY:  "/run/secrets/jwt_private_key.pem"
@@ -77,7 +77,7 @@ services:
       - ./secrets/jwt_private_key.pem:/run/secrets/jwt_private_key.pem:ro
     command: ["java", "-jar", "/app/app.jar"]
     ports:
-      - "${APP_PORT}:8080"
+      - "${APP_PORT}:8082"
 
     environment:
       SPRING_PROFILES_ACTIVE: prod
@@ -106,7 +106,7 @@ services:
 
     command: ["java", "-jar", "/app/app.jar"]
     ports:
-      - "${GATEWAY_PORT}:8080"
+      - "${GATEWAY_PORT}:9000"
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_CLOUD_CONSUL_HOST: consul
@@ -122,7 +122,7 @@ services:
     networks:
       - medical-net
     healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'" ]
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:9000/actuator/health | grep -q '\"status\":\"UP\"'" ]
       interval: 5s
       timeout: 2s
       retries: 30

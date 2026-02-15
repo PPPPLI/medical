@@ -79,8 +79,8 @@ jobs:
           fi
 
           cp "${AUTH_JAR}" docker/jars/authentication.jar
-          # compose volume expects ./jars/questionnaire.jar for appointment service
-          cp "${APP_JAR}" docker/jars/questionnaire.jar
+          # compose volume expects ./jars/appointment.jar for appointment service
+          cp "${APP_JAR}" docker/jars/appointment.jar
           cp "${GW_JAR}" docker/jars/gateway.jar
 
           echo "✅ jars prepared:"
