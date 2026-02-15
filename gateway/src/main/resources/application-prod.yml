@@ -1,0 +1,53 @@
+spring:
+  cloud:
+    consul:
+      host: ${CONSUL_HOST:consul}
+      port: ${CONSUL_PORT:8500}
+      config:
+        profile-separator: "-"
+        format: yaml
+        enabled: true
+        fail-fast: false
+      discovery:
+        service-name: ${spring.application.name}
+        prefer-ip-address: false
+
+    gateway:
+      server:
+        webflux:
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowed-origins:
+                  - "*"
+                allowed-methods:
+                  - GET
+                  - POST
+                  - PUT
+                  - DELETE
+                  - OPTIONS
+                  - PATCH
+                allowed-headers:
+                  - "*"
+            add-to-simple-url-handler-mapping: true
+          routes:
+            - id: auth
+              uri: lb://auth-8081
+              predicates:
+                - Path=/usr/**
+              filters:
+                - RewritePath=usr/(?<segment>.*),user/${segment}
+
+            - id: appointment
+              uri: lb://appointment-8082
+              predicates:
+                - Path=/ap/**
+              filters:
+                - RewritePath=ap/(?<segment>.*),appointment/${segment}
+
+            - id: doctor
+              uri: lb://appointment-8082
+              predicates:
+                - Path=/doc/**
+              filters:
+                - RewritePath=doc/(?<segment>.*),doctor/${segment}

@@ -1,4 +1,4 @@
-name: survey-backend
+name: medical-backend
 
 services:
   consul:
