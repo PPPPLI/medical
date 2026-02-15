@@ -136,39 +136,46 @@ jobs:
       # Wait for Gateway
       # 失败也不直接终止，并把结果写到 output
       # ----------------------------
-      - name: Wait for Gateway health (debuggable)
+      - name: Wait for Gateway health (with logs)
         id: wait_gateway
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           echo "Waiting for gateway health at ${GATEWAY_URL}/actuator/health ..."
-
-          echo "---- docker compose ps ----"
+          
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps || true
-
           echo "---- gateway port mapping ----"
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" port gateway 8080 || true
-
-          for i in {1..60}; do
+          
+          GW_ID="$(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps -q gateway || true)"
+          echo "gateway container id: ${GW_ID}"
+          
+          for i in {1..120}; do
+            # 打印容器状态（看是否在重启）
+            if [[ -n "${GW_ID}" ]]; then
+              echo "---- status attempt ${i} ----"
+              docker inspect --format='Status={{.State.Status}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${GW_ID}" || true
+            fi
+          
             code="$(curl -sS -o /tmp/health.json -w "%{http_code}" "${GATEWAY_URL}/actuator/health" || true)"
             if [[ "$code" == "200" ]]; then
-              echo "✅ Gateway health OK (200)"
+              echo "✅ Gateway health OK"
               cat /tmp/health.json || true
               echo "ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-
-            echo "Attempt $i: HTTP $code"
-            # 如果是 401/403/404，打印一下响应头帮助判断
-            if [[ "$code" == "401" || "$code" == "403" || "$code" == "404" ]]; then
-              echo "---- response headers ----"
-              curl -i "${GATEWAY_URL}/actuator/health" | head -n 30 || true
+          
+            echo "Attempt ${i}: HTTP ${code}"
+            # 每 10 次输出一次 gateway 日志尾部（抓到崩溃原因）
+            if (( i % 10 == 0 )); then
+              echo "---- gateway logs (tail 200) ----"
+              docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs --no-color --tail=200 gateway || true
             fi
-
-            sleep 3
+          
+            sleep 2
           done
-
+          
           echo "❌ Gateway not ready"
           echo "ready=false" >> "$GITHUB_OUTPUT"
           exit 1
